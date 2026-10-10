@@ -305,72 +305,17 @@ a {
     align-items: center;
     justify-content: space-between;
     padding: 0 24px;
+    gap: 20px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
 .header-left {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     flex: 1;
-    min-width: 0;
-    max-width: 720px;
-}
-
-.mh-header-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: linear-gradient(135deg, rgba(30, 58, 138, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
-    border: 1px solid rgba(59, 130, 246, 0.25);
-    border-radius: 9999px;
-    padding: 0 12px;
-    height: 34px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    line-height: 1;
-}
-
-.mh-header-pill-text {
-    font-size: 0.8rem;
-    font-weight: 700;
-    color: #1e3a8a;
-    white-space: nowrap;
-    line-height: 1;
-}
-
-.mh-header-pill-tag {
-    font-size: 0.65rem;
-    background: #2563eb;
-    color: #ffffff;
-    padding: 2px 7px;
-    border-radius: 10px;
-    font-weight: 800;
-    white-space: nowrap;
-    line-height: 1;
-}
-
-.mh-pill-full {
-    display: inline;
-}
-
-.mh-pill-short {
-    display: none;
-}
-
-@media (max-width: 1350px) {
-    .mh-pill-full {
-        display: none;
-    }
-    .mh-pill-short {
-        display: inline;
-    }
-}
-
-@media (max-width: 960px) {
-    .mh-header-pill {
-        display: none;
-    }
+    min-width: 220px;
+    max-width: 480px;
 }
 
 .mobile-menu-toggle {
@@ -378,6 +323,9 @@ a {
     font-size: 1.2rem;
     color: var(--text-primary);
     padding: 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
 }
 
 .header-search-box {
@@ -387,9 +335,8 @@ a {
     background: var(--bg-workspace);
     border: 1px solid var(--border-card);
     border-radius: var(--radius-pill);
-    padding: 7px 16px;
-    flex: 1;
-    min-width: 160px;
+    padding: 8px 16px;
+    width: 100%;
     transition: border-color 0.2s, background 0.2s;
 }
 
@@ -402,6 +349,7 @@ a {
 .header-search-box i {
     color: var(--text-muted);
     font-size: 0.9rem;
+    flex-shrink: 0;
 }
 
 .header-search-box input {
@@ -410,17 +358,19 @@ a {
     width: 100%;
     font-size: 0.88rem;
     color: var(--text-primary);
+    outline: none;
 }
 
 .header-search-box input::placeholder {
     color: var(--text-muted);
 }
 
-/* Header Right */
+/* Header Right Actions Toolbar */
 .header-right {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    flex-shrink: 0;
 }
 
 /* Quick Persona Selector Dropdown / Pills */
