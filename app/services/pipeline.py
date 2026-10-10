@@ -74,16 +74,17 @@ if model is None:
 
 MODEL = model
 
-# Initialize Haar Face Cascade for detecting human faces
-FACE_CASCADE = None
+# Initialize Haar Face Cascades for detecting human faces
+FACE_CASCADES = []
 try:
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        cascade_obj = cv2.CascadeClassifier(cascade_path)
-        if not cascade_obj.empty():
-            FACE_CASCADE = cascade_obj
+        for cas_name in ["haarcascade_frontalface_default.xml", "haarcascade_frontalface_alt2.xml", "haarcascade_profileface.xml"]:
+            cas_path = cv2.data.haarcascades + cas_name
+            cas_obj = cv2.CascadeClassifier(cas_path)
+            if not cas_obj.empty():
+                FACE_CASCADES.append(cas_obj)
 except Exception:
-    FACE_CASCADE = None
+    FACE_CASCADES = []
 
 
 def validate_specimen_quality(img_cv2: np.ndarray, language: str = "en") -> Tuple[bool, str, str]:
@@ -94,11 +95,12 @@ def validate_specimen_quality(img_cv2: np.ndarray, language: str = "en") -> Tupl
 
     Checks:
     1. Dimensions (minimum 100x100 pixels)
-    2. Human Face Cascade Detection (rejects human selfies/faces)
-    3. Illumination / Extreme Darkness / Overexposure
-    4. Texture Variance (Laplacian variance < 30.0 indicates flat/synthetic/non-foliar surface)
-    5. Foliage Pigment Dominance (HSV green & necrotic foliar pigment ratio >= 0.08)
-    6. Edge Clutter / Non-organic density (Canny edge ratio > 0.48 indicates text/clutter)
+    2. Multi-Cascade Human Face & Profile Detection
+    3. Human Skin Pigment Guardrail (YCrCb + RGB Peer model)
+    4. Active Chlorophyll Foliage Pigment Verification (HSV green spectrum)
+    5. Illumination / Extreme Darkness / Overexposure
+    6. Texture Variance (Laplacian variance < 30.0 indicates flat/synthetic/non-foliar surface)
+    7. Edge Clutter / Non-organic density (Canny edge ratio > 0.48 indicates text/clutter)
     """
     h, w = img_cv2.shape[:2]
     total_pixels = max(h * w, 1)
@@ -110,45 +112,62 @@ def validate_specimen_quality(img_cv2: np.ndarray, language: str = "en") -> Tupl
     # Convert to grayscale for structural checks
     gray = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2GRAY)
 
-    # 2. Human Face Detection (Strict OOD)
-    if FACE_CASCADE is not None:
-        try:
-            # Downscale large images for rapid face scanning
-            scale = 1.0
-            if max(h, w) > 800:
-                scale = 800.0 / max(h, w)
-                small_gray = cv2.resize(gray, (int(w * scale), int(h * scale)))
-            else:
-                small_gray = gray
-            faces = FACE_CASCADE.detectMultiScale(small_gray, scaleFactor=1.2, minNeighbors=4, minSize=(30, 30))
-            if len(faces) > 0:
-                return False, "human_face_detected", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
-        except Exception:
-            pass
+    # 2. Human Face & Profile Detection (Strict OOD)
+    if FACE_CASCADES:
+        scale = 1.0
+        if max(h, w) > 800:
+            scale = 800.0 / max(h, w)
+            small_gray = cv2.resize(gray, (int(w * scale), int(h * scale)))
+        else:
+            small_gray = gray
+        for cas in FACE_CASCADES:
+            try:
+                faces = cas.detectMultiScale(small_gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
+                if len(faces) > 0:
+                    return False, "human_face_detected", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
+            except Exception:
+                continue
 
-    # 3. Illumination check
+    # 3. Human Skin Pigment Guardrail
+    ycrcb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2YCrCb)
+    skin_ycrcb = (ycrcb[:, :, 1] >= 133) & (ycrcb[:, :, 1] <= 173) & (ycrcb[:, :, 2] >= 77) & (ycrcb[:, :, 2] <= 127)
+    b_ch, g_ch, r_ch = img_cv2[:, :, 0], img_cv2[:, :, 1], img_cv2[:, :, 2]
+    skin_rgb = (r_ch > g_ch) & (g_ch > b_ch) & (r_ch > 50)
+    skin_pixels = skin_ycrcb & skin_rgb
+    skin_ratio = np.count_nonzero(skin_pixels) / total_pixels
+
+    # 4. Chlorophyll Green Foliage Pigment Check
+    hsv = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2HSV)
+    mask_green = cv2.inRange(hsv, np.array([28, 30, 25]), np.array([92, 255, 255]))
+    green_ratio = np.count_nonzero(mask_green) / total_pixels
+
+    # If prominent human skin is present and green foliar pigment is absent
+    if skin_ratio > 0.05 and green_ratio < 0.06:
+        return False, "human_subject_detected", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
+
+    # Minimum chlorophyll threshold for genuine agricultural plant leaves
+    if green_ratio < 0.035:
+        return False, "no_chlorophyll_detected", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
+
+    # 5. Illumination check
     mean_brightness = float(np.mean(gray))
     if mean_brightness < 20.0 or mean_brightness > 245.0:
         return False, "extreme_lighting", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
 
-    # 4. Texture Variance (Laplacian)
+    # 6. Texture Variance (Laplacian)
     laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     if laplacian_var < 30.0:
         return False, "non_plant_texture", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
 
-    # 5. Foliage Organic Pigment Check (HSV)
-    hsv = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2HSV)
-    # Green and yellow-green foliar range
-    mask_green = cv2.inRange(hsv, np.array([25, 25, 20]), np.array([95, 255, 255]))
-    # Brown / yellow / rust necrotic leaf tissue
-    mask_autumn = cv2.inRange(hsv, np.array([10, 30, 25]), np.array([25, 255, 240]))
+    # 7. Overall Foliar Pigment Balance (Green + Necrotic spots)
+    mask_autumn = cv2.inRange(hsv, np.array([12, 35, 25]), np.array([27, 255, 230]))
     mask_plant = cv2.bitwise_or(mask_green, mask_autumn)
     plant_ratio = np.count_nonzero(mask_plant) / total_pixels
 
     if plant_ratio < 0.08:
         return False, "non_foliage_ratio", "Non-plant or foreign object detected. Please upload a genuine plant leaf."
 
-    # 6. Clutter / Non-organic background check
+    # 8. Clutter / Non-organic background check
     edges = cv2.Canny(gray, 50, 150)
     edge_ratio = np.count_nonzero(edges) / total_pixels
     if edge_ratio > 0.48:
@@ -160,7 +179,7 @@ def validate_specimen_quality(img_cv2: np.ndarray, language: str = "en") -> Tupl
 def _find_foliage_box(img_cv2: np.ndarray) -> Optional[list]:
     """Find a coarse foliage box for valid leaves when YOLO has no confident box."""
     hsv = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2HSV)
-    plant_mask = cv2.inRange(hsv, np.array([20, 30, 20]), np.array([100, 255, 255]))
+    plant_mask = cv2.inRange(hsv, np.array([28, 35, 25]), np.array([92, 255, 255]))
     plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     plant_mask = cv2.morphologyEx(plant_mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     contours, _ = cv2.findContours(plant_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -168,7 +187,7 @@ def _find_foliage_box(img_cv2: np.ndarray) -> Optional[list]:
         return None
     contour = max(contours, key=cv2.contourArea)
     area = cv2.contourArea(contour)
-    if area < img_cv2.shape[0] * img_cv2.shape[1] * 0.02:
+    if area < img_cv2.shape[0] * img_cv2.shape[1] * 0.03:
         return None
     x, y, w, h = cv2.boundingRect(contour)
     return [x, y, x + w, y + h]
@@ -196,17 +215,19 @@ def _analyse_leaf_surface(img_cv2: np.ndarray, box: list) -> Dict[str, Any]:
         return {"leaf_area_percent": 0.0, "damage_percent": 0.0, "markers": []}
 
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    leaf_mask = cv2.inRange(hsv, np.array([15, 25, 20]), np.array([100, 255, 255]))
-    leaf_pixels = leaf_mask > 0
-
-    brown = cv2.inRange(hsv, np.array([5, 30, 20]), np.array([28, 255, 220])) > 0
-    pale_or_dark = ((hsv[:, :, 1] < 55) & (hsv[:, :, 2] < 165)) | (hsv[:, :, 2] < 45)
-    damage_mask = (brown | pale_or_dark) & leaf_pixels
-
-    leaf_count = int(np.count_nonzero(leaf_pixels))
-    damage_count = int(np.count_nonzero(damage_mask))
-
+    green_mask = cv2.inRange(hsv, np.array([28, 30, 25]), np.array([92, 255, 255]))
+    green_count = np.count_nonzero(green_mask)
     total_crop_pixels = max(crop.shape[0] * crop.shape[1], 1)
+
+    if (green_count / total_crop_pixels) < 0.03:
+        return {"leaf_area_percent": 0.0, "damage_percent": 0.0, "markers": []}
+
+    lesion_mask = cv2.inRange(hsv, np.array([10, 30, 20]), np.array([27, 255, 220]))
+    leaf_mask = cv2.bitwise_or(green_mask, lesion_mask)
+
+    leaf_count = int(np.count_nonzero(leaf_mask))
+    damage_count = int(np.count_nonzero(lesion_mask))
+
     leaf_pct = round((leaf_count / total_crop_pixels) * 100, 1)
     damage_pct = round((damage_count / max(leaf_count, 1)) * 100, 1)
 
@@ -215,6 +236,7 @@ def _analyse_leaf_surface(img_cv2: np.ndarray, box: list) -> Dict[str, Any]:
         "damage_percent": damage_pct,
         "markers": []
     }
+
 
 
 def _build_recommendations(triage_level: str, condition_display: str, advisory_data: Dict[str, Any]) -> str:
@@ -308,22 +330,11 @@ def process_and_predict(
 
     if MODEL is not None:
         try:
-            results = MODEL(img_resized, conf=0.12, verbose=False)[0]
-            # Use Ultralytics plot() function to draw bounding boxes and labels directly on image
-            try:
-                plotted_array = results.plot()
-                annotated_image_b64 = _encode_image(plotted_array)
-            except Exception:
-                annotated_image_b64 = None
-
+            results = MODEL(img_resized, conf=0.25, verbose=False)[0]
             if hasattr(results, "boxes") and results.boxes is not None and len(results.boxes) > 0:
                 boxes = sorted(results.boxes, key=lambda b: float(b.conf[0]), reverse=True)
         except Exception:
             boxes = []
-
-    # Fallback to plain resized image encoding if plotting not generated
-    if not annotated_image_b64:
-        annotated_image_b64 = _encode_image(img_resized)
 
     # Coarse foliage box detection
     foliage_box = _find_foliage_box(img_resized)
@@ -356,7 +367,7 @@ def process_and_predict(
         top_info = YOLO_CLASS_TAXONOMY.get(top_cls_id, {})
         detected_crop = top_info.get("crop", "unknown")
 
-        if top_conf >= 0.25:
+        if top_conf >= 0.30:
             if norm_crop == "soybean":
                 matched_box = top_b
                 if "rust" in top_info.get("raw", ""):
@@ -378,6 +389,16 @@ def process_and_predict(
             elif norm_crop == detected_crop:
                 matched_box = top_b
                 matched_info = top_info
+
+    # Only draw bounding boxes if a valid match was identified for the crop
+    if matched_box is not None and MODEL is not None:
+        try:
+            plotted_array = results.plot()
+            annotated_image_b64 = _encode_image(plotted_array)
+        except Exception:
+            annotated_image_b64 = _encode_image(img_resized)
+    else:
+        annotated_image_b64 = _encode_image(img_resized)
 
     # Handle clean healthy foliage when no disease box is detected
     if matched_box is None:
@@ -426,8 +447,8 @@ def process_and_predict(
                 "requires_expert": requires_expert
             }
 
-        # If not matching and low confidence
-        if boxes and float(boxes[0].conf[0]) < 0.20 and foliage_box is None:
+        # If no matched crop condition and no valid foliage contour, reject foreign object
+        if foliage_box is None or surface["leaf_area_percent"] < 8.0:
             return {
                 "valid": False,
                 "message": "Non-plant or foreign object detected. Please upload a genuine plant leaf."
